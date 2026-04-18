@@ -30,7 +30,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const newPathWrapper = document.getElementById('new-path-input-wrapper');
     const newPathInput = document.getElementById('new-path-input');
     const savePathBtn = document.getElementById('save-path-btn');
-    const ttsToggle = document.getElementById('tts-toggle');
     
     const recorderVisualizer = document.getElementById('recorder-visualizer');
     const appStatusText = document.querySelector('.status-text');
@@ -55,19 +54,9 @@ document.addEventListener('DOMContentLoaded', () => {
         } else {
             showWelcome();
         }
-        
-        // Restore TTS setting
-        const savedTTS = localStorage.getItem('aria_tts_enabled');
-        if (savedTTS !== null) {
-            ttsToggle.checked = savedTTS === 'true';
-        }
     }
 
     init();
-
-    ttsToggle.addEventListener('change', () => {
-        localStorage.setItem('aria_tts_enabled', ttsToggle.checked);
-    });
 
     // --- Path Management ---
 
@@ -304,10 +293,10 @@ document.addEventListener('DOMContentLoaded', () => {
     async function processCommand(text) {
         isProcessing = true;
         setAppStatus("Processing...", "busy");
-        updatePipelineUI('complete', 'active', '');
+        updatePipelineUI('', 'active', '');
 
         try {
-            const response = await fetch('/api/process_text', {
+            const response = await fetch('/api/process_text_stream', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -320,8 +309,24 @@ document.addEventListener('DOMContentLoaded', () => {
 
             if (!response.ok) throw new Error(await response.text());
 
-            const result = await response.json();
-            handlePipelineResult(result);
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                
+                const chunk = decoder.decode(value);
+                const lines = chunk.split('\n');
+                for (const line of lines) {
+                    if (line.trim().startsWith('data: ')) {
+                        try {
+                            const data = JSON.parse(line.trim().substring(6));
+                            handleStreamingUpdate(data);
+                        } catch(e) {}
+                    }
+                }
+            }
         } catch (err) {
             console.error(err);
             addBotMessage(`❌ Pipeline error: ${err.message}`);
@@ -330,6 +335,75 @@ document.addEventListener('DOMContentLoaded', () => {
             isProcessing = false;
             setAppStatus("Ready", "ready");
             refreshInputState();
+        }
+    }
+
+    function handleStreamingUpdate(result) {
+        const isNewSession = !currentThreadId;
+        currentThreadId = result.thread_id || currentThreadId;
+        if (currentThreadId) localStorage.setItem('aria_thread_id', currentThreadId);
+        chatHistory = result.messages;
+
+        // Determine which step we are in based on what state is present
+        if (result.intent_result) {
+            updatePipelineUI('complete', 'complete', 'active');
+        } else if (result.transcript) {
+            updatePipelineUI('complete', 'active', '');
+        }
+
+        if (result.is_interrupted) {
+            updatePipelineUI('complete', 'complete', 'active');
+            // We only show HITL if we have the data
+            if (result.messages && result.messages.length > 0) {
+                // If it's interrupted, it means it's waiting for confirm
+                // We'll fetch the full thread history to get interrupt_data
+                selectSession(currentThreadId); 
+            }
+        } else if (result.tool_results && result.tool_results.length > 0) {
+            updatePipelineUI('complete', 'complete', 'complete');
+        }
+
+        updateChatDisplay();
+        if (isNewSession) loadSessions();
+    }
+
+    async function handleConfirm(confirmed) {
+        hitlOverlay.classList.add('hidden');
+        setAppStatus("Executing...", "busy");
+        updateStep(stepTools, 'active');
+
+        try {
+            const response = await fetch('/api/confirm_stream', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ thread_id: currentThreadId, confirmed })
+            });
+
+            if (!response.ok) throw new Error(await response.text());
+
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                
+                const chunk = decoder.decode(value);
+                const lines = chunk.split('\n');
+                for (const line of lines) {
+                    if (line.trim().startsWith('data: ')) {
+                        try {
+                            const data = JSON.parse(line.trim().substring(6));
+                            handleStreamingUpdate(data);
+                        } catch(e) {}
+                    }
+                }
+            }
+        } catch (err) {
+            addBotMessage(`❌ Execution error: ${err.message}`);
+            updateStep(stepTools, 'error');
+        } finally {
+            setAppStatus("Ready", "ready");
         }
     }
 
@@ -350,37 +424,10 @@ document.addEventListener('DOMContentLoaded', () => {
             addBotMessage(`⚠️ ${result.error}`);
         }
 
-        const lastMessage = chatHistory[chatHistory.length - 1];
-        if (lastMessage && lastMessage.role === 'assistant') {
-            speak(lastMessage.content);
-        }
-
         updateChatDisplay();
         if (isNewSession) loadSessions();
     }
 
-    // --- Voice Output (TTS) ---
-
-    async function speak(text) {
-        if (!ttsToggle.checked || !text) return;
-        
-        try {
-            const response = await fetch('/api/tts', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ text: text })
-            });
-            
-            if (!response.ok) throw new Error("TTS failed");
-            
-            const blob = await response.blob();
-            const url = URL.createObjectURL(blob);
-            const audio = new Audio(url);
-            audio.play();
-        } catch (err) {
-            console.error("TTS Error:", err);
-        }
-    }
 
     // --- HITL Handling ---
 
@@ -391,30 +438,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     confirmBtn.addEventListener('click', () => handleConfirm(true));
     cancelBtn.addEventListener('click', () => handleConfirm(false));
-
-    async function handleConfirm(confirmed) {
-        hitlOverlay.classList.add('hidden');
-        setAppStatus("Executing...", "busy");
-        updateStep(stepTools, 'active');
-
-        try {
-            const response = await fetch('/api/confirm', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ thread_id: currentThreadId, confirmed })
-            });
-
-            if (!response.ok) throw new Error(await response.text());
-
-            const result = await response.json();
-            handlePipelineResult(result);
-        } catch (err) {
-            addBotMessage(`❌ Execution error: ${err.message}`);
-            updateStep(stepTools, 'error');
-        } finally {
-            setAppStatus("Ready", "ready");
-        }
-    }
 
     // --- UI Helpers ---
 

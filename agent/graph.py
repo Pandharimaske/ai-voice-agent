@@ -109,9 +109,9 @@ def get_graph():
 
 # ── Pipeline helpers ──────────────────────────────────────────────────────────
 
-def run_pipeline(audio_path: str, thread_id: str, chat_history: list, output_path: str = None) -> dict:
+async def astream_pipeline(audio_path: str, thread_id: str, chat_history: list, output_path: str = None):
     """
-    Start a fresh pipeline run for the given audio file.
+    Start a fresh pipeline run and yield events for status updates.
     """
     graph = get_graph()
     config = {"configurable": {"thread_id": thread_id}}
@@ -127,13 +127,13 @@ def run_pipeline(audio_path: str, thread_id: str, chat_history: list, output_pat
         "error": None,
     }
 
-    graph.invoke(initial_state, config)
-    return _read_state(graph, config)
+    async for event in graph.astream(initial_state, config, stream_mode="values"):
+        yield event
 
 
-def run_pipeline_text(text: str, thread_id: str, chat_history: list, output_path: str = None) -> dict:
+async def astream_pipeline_text(text: str, thread_id: str, chat_history: list, output_path: str = None):
     """
-    Start a fresh pipeline run using direct text input (skips STT).
+    Start a fresh pipeline run (text input) and yield events.
     """
     graph = get_graph()
     config = {"configurable": {"thread_id": thread_id}}
@@ -149,8 +149,19 @@ def run_pipeline_text(text: str, thread_id: str, chat_history: list, output_path
         "error": None,
     }
 
-    graph.invoke(initial_state, config)
-    return _read_state(graph, config)
+    async for event in graph.astream(initial_state, config, stream_mode="values"):
+        yield event
+
+
+async def astream_resume_pipeline(thread_id: str, confirmed: bool):
+    """
+    Resume a pipeline and yield events.
+    """
+    graph = get_graph()
+    config = {"configurable": {"thread_id": thread_id}}
+
+    async for event in graph.astream(Command(resume={"confirmed": confirmed}), config, stream_mode="values"):
+        yield event
 
 
 def resume_pipeline(thread_id: str, confirmed: bool) -> dict:

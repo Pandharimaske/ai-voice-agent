@@ -15,7 +15,6 @@ langchain-anthropic>=0.3.0
 # STT & TTS API clients
 groq>=0.9.0
 openai>=1.0.0
-gTTS>=2.5.0
 anthropic>=0.40.0
 
 # Web Server

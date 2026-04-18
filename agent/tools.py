@@ -129,10 +129,12 @@ def general_chat(
     history: List[dict],
     llm: BaseChatModel,
     history_limit: int = 20,
-) -> str:
+    stream: bool = False,
+):
     """
     Conversational response with session memory.
     `history` is a list of {role: str, content: str} dicts.
+    If stream=True, returns a generator of tokens.
     """
     messages: list = [
         SystemMessage(content=(
@@ -152,6 +154,10 @@ def general_chat(
             messages.append(AIMessage(content=content))
 
     messages.append(HumanMessage(content=message))
+    
+    if stream:
+        return llm.stream(messages)
+    
     response = llm.invoke(messages)
     return response.content
 

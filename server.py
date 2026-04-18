@@ -1,4 +1,4 @@
-"""
+\"\"\"
 server.py
 ─────────
 ARIA — FastAPI backend.
@@ -6,7 +6,7 @@ Replaces app.py entirely. Serves the UI and exposes the pipeline API.
 
 Run:  python server.py
 UI:   http://localhost:8000
-"""
+\"\"\"
 
 from __future__ import annotations
 
@@ -15,17 +15,25 @@ import re
 import shutil
 import tempfile
 import uuid
+import json
 from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from agent.graph import resume_pipeline, run_pipeline
+from agent.graph import (
+    astream_pipeline, 
+    astream_pipeline_text, 
+    astream_resume_pipeline, 
+    get_thread_history, 
+    get_graph
+)
 from config.logging_config import logger
+from config.settings import settings
 
 # ── App setup ─────────────────────────────────────────────────────────────────
 
@@ -68,69 +76,91 @@ class TextProcessRequest(BaseModel):
     thread_id: str | None = None
     output_path: str | None = None
 
-class TTSRequest(BaseModel):
-    text: str
-    lang: str = "en"
+# ── Streaming helper ──────────────────────────────────────────────────────────
+
+async def event_generator(stream_iterator):
+    \"\"\"Yields events from the graph stream as SSE.\"\"\"
+    try:
+        async for event in stream_iterator:
+            # event is the state snapshot at each step
+            snapshot = {
+                \"transcript\": event.get(\"transcript\", \"\"),
+                \"intent_result\": event.get(\"intent_result\"),
+                \"tool_results\": event.get(\"tool_results\", []),
+                \"messages\": event.get(\"messages\", []),
+                \"error\": event.get(\"error\"),
+                \"is_interrupted\": event.get(\"confirmed\") is None and event.get(\"intent_result\") is not None, 
+            }
+            yield f\"data: {json.dumps(snapshot)}\n\n\"
+    except Exception as e:
+        logger.error(f\"Stream error: {str(e)}\")
+        yield f\"data: {json.dumps({'error': str(e)})}\n\n\"
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
 
-@app.get("/")
+@app.get(\"/\")
 async def serve_ui():
-    """Serve the main UI."""
-    return FileResponse(str(UI_DIR / "index.html"))
+    \"\"\"Serve the main UI.\"\"\"
+    return FileResponse(str(UI_DIR / \"index.html\"))
 
 
-@app.get("/health")
+@app.get(\"/health\")
 async def health():
-    return {"status": "ok", "service": "ARIA"}
+    return {\"status\": \"ok\", \"service\": \"ARIA\"}
 
 
-@app.post("/api/process", response_model=PipelineResponse)
-async def process_audio(
+@app.post(\"/api/process_stream\")
+async def process_stream(
     audio: UploadFile = File(...),
-    chat_history: str = Form(default="[]"),
+    chat_history: str = Form(default=\"[]\"),
 ):
-    """
-    Receive an audio file, run the full pipeline.
-    Returns either:
-    - Complete result (is_interrupted=False)
-    - Interrupt state (is_interrupted=True) waiting for HITL confirmation
-    """
-    import json
-
-    # Parse chat history from form
+    \"\"\"Streaming version of process_audio.\"\"\"
     try:
         history = json.loads(chat_history)
-    except Exception:
+    except:
         history = []
 
-    # Save uploaded audio to temp file
-    suffix = Path(audio.filename or "audio.wav").suffix or ".wav"
+    suffix = Path(audio.filename or \"audio.wav\").suffix or \".wav\"
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
-    try:
-        content = await audio.read()
-        tmp.write(content)
-        tmp.flush()
-        tmp.close()
+    content = await audio.read()
+    tmp.write(content)
+    tmp.flush()
+    tmp.close()
 
-        thread_id = str(uuid.uuid4())
-        logger.info(f"Processing audio for thread: {thread_id[:8]}")
-        result = run_pipeline(tmp.name, thread_id, history)
-        logger.info(f"Audio pipeline complete: {thread_id[:8]}")
-    except Exception as e:
-        logger.error(f"Audio processing failed: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
+    thread_id = str(uuid.uuid4())
+    
+    async def cleanup_and_stream():
         try:
-            os.unlink(tmp.name)
-        except Exception:
-            pass
+            stream = astream_pipeline(tmp.name, thread_id, history)
+            async for data in event_generator(stream):
+                yield data
+        finally:
+            try: os.unlink(tmp.name)
+            except: pass
 
-@app.post("/api/transcribe")
+    return StreamingResponse(cleanup_and_stream(), media_type=\"text/event-stream\")
+
+
+@app.post(\"/api/process_text_stream\")
+async def process_text_stream(body: TextProcessRequest):
+    \"\"\"Streaming version of process_text.\"\"\"
+    thread_id = body.thread_id or str(uuid.uuid4())
+    stream = astream_pipeline_text(body.text, thread_id, body.chat_history, body.output_path)
+    return StreamingResponse(event_generator(stream), media_type=\"text/event-stream\")
+
+
+@app.post(\"/api/confirm_stream\")
+async def confirm_stream(body: ConfirmRequest):
+    \"\"\"Streaming version of confirm_action.\"\"\"
+    stream = astream_resume_pipeline(body.thread_id, body.confirmed)
+    return StreamingResponse(event_generator(stream), media_type=\"text/event-stream\")
+
+
+@app.post(\"/api/transcribe\")
 async def transcribe_audio(audio: UploadFile = File(...)):
-    """Transcribe audio file only, without running the full pipeline."""
-    suffix = Path(audio.filename or "audio.wav").suffix or ".wav"
+    \"\"\"Transcribe audio file only.\"\"\"
+    suffix = Path(audio.filename or \"audio.wav\").suffix or \".wav\"
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
     try:
         content = await audio.read()
@@ -138,153 +168,55 @@ async def transcribe_audio(audio: UploadFile = File(...)):
         tmp.flush()
         tmp.close()
 
-        logger.info(f"Transcribing audio: {audio.filename}")
         from agent.stt import get_stt
-        from config.settings import settings
         api_key = settings.api_key_for(settings.stt.provider)
         stt = get_stt(settings.stt.provider, settings.stt.model, api_key)
         transcript = stt.transcribe(tmp.name)
-        logger.info(f"Transcription successful: '{transcript[:50]}...'")
-        return {"transcript": transcript}
+        return {\"transcript\": transcript}
     except Exception as e:
-        logger.error(f"Transcription failed: {str(e)}")
+        logger.error(f\"Transcription failed: {str(e)}\")
         raise HTTPException(status_code=500, detail=str(e))
     finally:
-        try:
-            os.unlink(tmp.name)
-        except Exception:
-            pass
-
-@app.post("/api/process_text", response_model=PipelineResponse)
-async def process_text(body: TextProcessRequest):
-    """Run the pipeline using direct text input."""
-    thread_id = body.thread_id or str(uuid.uuid4())
-    thread_id = body.thread_id or str(uuid.uuid4())
-    logger.info(f"Processing text for thread {thread_id[:8]}... | Output Path: {body.output_path or 'default'}")
-    try:
-        from agent.graph import run_pipeline_text
-        result = run_pipeline_text(body.text, thread_id, body.chat_history, body.output_path)
-        logger.info(f"Text pipeline finished: {thread_id[:8]}")
-    except ImportError:
-        logger.error("ImportError: Text processing not implemented in graph.py")
-        raise HTTPException(status_code=501, detail="Text processing not implemented in graph.py")
-    except Exception as e:
-        logger.error(f"Text processing error in thread {thread_id[:8]}: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-    return PipelineResponse(
-        thread_id=thread_id,
-        transcript=body.text,
-        intent_result=result.get("intent_result"),
-        tool_results=result.get("tool_results", []),
-        messages=result.get("messages", []),
-        output_path=result.get("output_path"),
-        error=result.get("error"),
-        is_interrupted=result.get("is_interrupted", False),
-        interrupt_data=result.get("interrupt_data"),
-        confirmed=result.get("confirmed"),
-    )
+        try: os.unlink(tmp.name)
+        except: pass
 
 
-@app.post("/api/confirm", response_model=PipelineResponse)
-async def confirm_action(body: ConfirmRequest):
-    """
-    Resume a paused (HITL-interrupted) pipeline.
-    Pass confirmed=true to execute, false to cancel.
-    """
-    try:
-        result = resume_pipeline(body.thread_id, body.confirmed)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-    return PipelineResponse(
-        thread_id=body.thread_id,
-        transcript=result.get("transcript", ""),
-        intent_result=result.get("intent_result"),
-        tool_results=result.get("tool_results", []),
-        messages=result.get("messages", []),
-        output_path=result.get("output_path"),
-        error=result.get("error"),
-        is_interrupted=result.get("is_interrupted", False),
-        interrupt_data=result.get("interrupt_data"),
-        confirmed=result.get("confirmed"),
-    )
-
-
-@app.post("/api/tts")
-async def text_to_speech(body: TTSRequest):
-    """Convert text to speech using gTTS."""
-    from gtts import gTTS
-    import io
-    from fastapi.responses import StreamingResponse
-    
-    logger.info(f"Generating TTS for: '{body.text[:50]}...'")
-    try:
-        # Clean text of markdown before speaking
-        clean_text = re.sub(r"```[\s\S]*?```", "", body.text) # Remove code blocks
-        clean_text = re.sub(r"[`*#]", "", clean_text)       # Remove markdown chars
-        
-        tts = gTTS(text=clean_text, lang=body.lang)
-        mp3_fp = io.BytesIO()
-        tts.write_to_fp(mp3_fp)
-        mp3_fp.seek(0)
-        
-        return StreamingResponse(mp3_fp, media_type="audio/mpeg")
-    except Exception as e:
-        logger.error(f"TTS failed: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/api/sessions")
+@app.get(\"/api/sessions\")
 async def list_sessions():
-    """List all unique thread IDs from the checkpointer database."""
-    import sqlite3
-    from config.settings import settings
+    \"\"\"List all unique thread IDs from the checkpointer database.\"\"\"
     db_path = str(settings.db_path)
+    if not os.path.exists(db_path):
+        return []
+    
+    import sqlite3
     try:
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
-        # Query unique thread IDs and their latest checkpoint ID (as a proxy for recency)
-        cursor.execute("""
-            SELECT thread_id, MAX(checkpoint_id) 
-            FROM checkpoints 
-            GROUP BY thread_id 
-            ORDER BY MAX(checkpoint_id) DESC
-        """)
-        sessions = [{"thread_id": row[0]} for row in cursor.fetchall()]
+        cursor.execute(\"SELECT DISTINCT thread_id FROM checkpoints ORDER BY checkpoint_id DESC\")
+        sessions = [{\"thread_id\": row[0]} for row in cursor.fetchall()]
         conn.close()
         return sessions
-    except Exception as e:
+    except:
         return []
 
-@app.get("/api/sessions/{thread_id}", response_model=PipelineResponse)
+
+@app.get(\"/api/sessions/{thread_id}\")
 async def get_session(thread_id: str):
-    """Get the full state and history for a specific session."""
+    \"\"\"Retrieve history and state for a specific thread.\"\"\"
     try:
-        from agent.graph import get_thread_history
         result = get_thread_history(thread_id)
-        return PipelineResponse(
-            thread_id=thread_id,
-            transcript=result.get("transcript", ""),
-            intent_result=result.get("intent_result"),
-            tool_results=result.get("tool_results", []),
-            messages=result.get("messages", []),
-            output_path=result.get("output_path"),
-            error=result.get("error"),
-            is_interrupted=result.get("is_interrupted", False),
-            interrupt_data=result.get("interrupt_data"),
-            confirmed=result.get("confirmed"),
-        )
+        return result
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=404, detail=f\"Session {thread_id} not found: {str(e)}\")
+
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
-if __name__ == "__main__":
+if __name__ == \"__main__\":
     uvicorn.run(
-        "server:app",
-        host="0.0.0.0",
+        \"server:app\",
+        host=\"0.0.0.0\",
         port=8000,
         reload=True,
-        reload_dirs=["."],
+        reload_dirs=[\".\"],
     )
