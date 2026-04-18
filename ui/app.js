@@ -212,6 +212,8 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
+    sendBtn.addEventListener('click', handleSend);
+
     micBtn.addEventListener('click', async () => {
         if (!recorder.isRecording) {
             setAppStatus("Requesting Mic...", "busy");
