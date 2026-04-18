@@ -1,4 +1,21 @@
-from .graph import get_graph, run_pipeline, resume_pipeline
-from .state import AgentState, IntentResult, IntentAction
+"""
+agent/__init__.py
+─────────────────
+Package exports for the ARIA Agent.
+"""
 
-__all__ = ["get_graph", "run_pipeline", "resume_pipeline", "AgentState", "IntentResult", "IntentAction"]
+from .graph import (
+    astream_pipeline,
+    astream_pipeline_text,
+    astream_resume_pipeline,
+    get_thread_history,
+    init_graph,
+)
+
+__all__ = [
+    "astream_pipeline",
+    "astream_pipeline_text",
+    "astream_resume_pipeline",
+    "get_thread_history",
+    "init_graph",
+]

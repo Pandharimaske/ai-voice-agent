@@ -3,115 +3,168 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="ARIA — Audio Reasoning Intelligence Agent. Voice-controlled local AI that creates files, writes code, and executes commands.">
     <title>ARIA — Voice Intelligence Agent</title>
     <link rel="stylesheet" href="/static/style.css">
-    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;600;700&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
 </head>
 <body>
     <div class="app-container">
-        <!-- Sidebar: Session & Config -->
-        <aside class="sidebar">
+
+        <!-- ── Sidebar ───────────────────────────────────────────────────── -->
+        <aside class="sidebar" id="sidebar">
             <header class="sidebar-header">
-                <h1 class="aria-logo">ARIA</h1>
-                <p class="aria-subtitle">v1.0.0</p>
-                <button id="new-chat-btn" class="primary-btn" style="margin-top: 1.5rem; padding: 0.6rem;">+ New Session</button>
+                <div class="logo-row">
+                    <div class="aria-logo-wrap">
+                        <span class="aria-orb"></span>
+                        <h1 class="aria-logo">ARIA</h1>
+                    </div>
+                    <button id="sidebar-toggle" class="icon-btn" title="Collapse sidebar">◀</button>
+                </div>
+                <p class="aria-subtitle">AUDIO REASONING INTELLIGENCE AGENT</p>
+                <button id="new-chat-btn" class="primary-btn" style="margin-top:1.25rem;">
+                    + New Session
+                </button>
             </header>
 
+            <!-- Sessions -->
             <div class="panel-label">Recent Sessions</div>
             <div class="session-list" id="session-list">
-                <div class="empty-state">No sessions found.</div>
+                <div class="empty-state">No sessions yet.</div>
             </div>
 
-
+            <!-- Output path -->
             <div class="panel-label">Output Path</div>
             <div class="config-section">
                 <div class="path-selector-wrapper">
-                    <select id="path-dropdown" class="path-select">
-                        <option value="./output">./output (default)</option>
-                    </select>
-                    <button id="add-path-btn" class="icon-btn-small" title="Add New Path">+</button>
+                    <select id="path-dropdown" class="path-select"></select>
+                    <button id="add-path-btn" class="icon-btn-small" title="Add path">+</button>
                 </div>
                 <div id="new-path-input-wrapper" class="new-path-input-wrapper hidden">
-                    <input type="text" id="new-path-input" placeholder="e.g. ./my_project" class="path-input-field">
+                    <input type="text" id="new-path-input" placeholder="e.g. ./projects/myapp" class="path-input-field">
                     <button id="save-path-btn" class="save-path-btn">Save</button>
                 </div>
             </div>
 
-            <div class="panel-label">Pipeline Status</div>
-            <div class="pipeline-steps mini">
-                <div class="step-status" id="step-stt" title="Speech-to-Text"><span class="step-dot"></span></div>
-                <div class="step-status" id="step-intent" title="Intent Classification"><span class="step-dot"></span></div>
-                <div class="step-status" id="step-tools" title="Tool Execution"><span class="step-dot"></span></div>
+            <!-- Output files -->
+            <div class="panel-label" style="margin-top:0.75rem;">
+                Output Files
+                <button id="refresh-files-btn" class="panel-label-btn" title="Refresh">↺</button>
+            </div>
+            <div class="file-list" id="file-list">
+                <div class="empty-state">No files yet.</div>
             </div>
 
+            <!-- Footer -->
             <div class="sidebar-footer">
                 <div class="status-badge" id="app-status">
-                    <span class="status-dot"></span>
-                    <span class="status-text">Ready</span>
+                    <span class="status-dot" id="status-dot"></span>
+                    <span class="status-text" id="status-text">Ready</span>
                 </div>
-                <button id="reset-session" class="icon-btn" title="Clear Local Data">↺</button>
+                <button id="reset-session" class="icon-btn" title="Clear local cache">↺</button>
             </div>
         </aside>
 
-        <!-- Main: Chat Interface -->
+        <!-- ── Main chat area ─────────────────────────────────────────────── -->
         <main class="chat-main">
+
+            <!-- Pipeline steps ticker -->
+            <div class="pipeline-bar" id="pipeline-bar" style="display:none;">
+                <div class="pipeline-steps" id="pipeline-steps">
+                    <div class="pipeline-step" id="step-stt">
+                        <span class="step-icon">🎤</span>
+                        <span class="step-label">Transcribe</span>
+                    </div>
+                    <div class="pipeline-arrow">›</div>
+                    <div class="pipeline-step" id="step-intent">
+                        <span class="step-icon">🧠</span>
+                        <span class="step-label">Reason</span>
+                    </div>
+                    <div class="pipeline-arrow">›</div>
+                    <div class="pipeline-step" id="step-tool">
+                        <span class="step-icon">⚡</span>
+                        <span class="step-label">Execute</span>
+                    </div>
+                    <div class="pipeline-arrow">›</div>
+                    <div class="pipeline-step" id="step-done">
+                        <span class="step-icon">✅</span>
+                        <span class="step-label">Done</span>
+                    </div>
+                </div>
+                <div class="pipeline-intent" id="pipeline-intent"></div>
+            </div>
+
+            <!-- Chat messages -->
             <div class="chat-messages" id="chat-messages">
-                <!-- Welcome Message -->
-                <div class="chat-msg bot">
-                    Hello! I am ARIA. How can I help you today?
+                <div class="welcome-card">
+                    <div class="welcome-orb"></div>
+                    <h2 class="welcome-title">Hello, I'm ARIA</h2>
+                    <p class="welcome-subtitle">Your voice-controlled local AI agent</p>
+                    <div class="welcome-capabilities">
+                        <div class="cap-item"><span>📄</span> Create &amp; write files</div>
+                        <div class="cap-item"><span>💻</span> Generate code</div>
+                        <div class="cap-item"><span>📝</span> Summarize text</div>
+                        <div class="cap-item"><span>⚡</span> Run terminal commands</div>
+                        <div class="cap-item"><span>💬</span> General conversation</div>
+                    </div>
+                    <p class="welcome-hint">Type a command below or use the 🎙️ mic button</p>
                 </div>
             </div>
 
-            <!-- HITL Overlay -->
+            <!-- HITL confirmation overlay -->
             <div id="hitl-overlay" class="hitl-overlay hidden">
                 <div class="hitl-card">
                     <div class="hitl-header">
                         <span class="hitl-icon">⚡</span>
-                        <h3>Confirmation Required</h3>
+                        <h3>Action Confirmation Required</h3>
                     </div>
                     <div id="hitl-message" class="hitl-message"></div>
                     <div class="hitl-actions">
-                        <button id="confirm-btn" class="confirm-btn">Confirm & Execute</button>
+                        <button id="confirm-btn" class="confirm-btn">✅ Confirm &amp; Execute</button>
                         <button id="cancel-btn" class="cancel-btn">Cancel</button>
                     </div>
                 </div>
             </div>
 
-            <!-- Input Area -->
+            <!-- Input area -->
             <footer class="input-area">
-                <div class="input-wrapper">
+                <div class="input-wrapper" id="input-wrapper">
                     <div class="textarea-container">
-                        <textarea id="chat-input" placeholder="Type a command or use voice..." rows="1"></textarea>
-                        
+                        <textarea
+                            id="chat-input"
+                            placeholder="Type a command, or press 🎙️ to speak…"
+                            rows="1"
+                            aria-label="Chat input"
+                        ></textarea>
                         <div class="recorder-visualizer hidden" id="recorder-visualizer">
-                            <canvas id="visualizer"></canvas>
+                            <canvas id="visualizer" width="200" height="40"></canvas>
                             <span id="timer">00:00</span>
                         </div>
                     </div>
-
                     <div class="input-actions">
-                        <button id="upload-btn" class="action-btn" title="Upload Audio">
+                        <button id="upload-btn" class="action-btn" title="Upload audio file">
                             <span>📂</span>
                         </button>
                         <input type="file" id="file-input" accept="audio/*" hidden>
-                        
-                        <button id="mic-btn" class="action-btn mic-btn" title="Record Voice">
+
+                        <button id="mic-btn" class="action-btn mic-btn" title="Record voice">
                             <span class="mic-icon">🎙️</span>
                         </button>
-                        
-                        <div class="divider"></div>
 
-                        <button id="send-btn" class="send-btn" title="Send Command" disabled>
-                            <span>▶</span>
+                        <div class="input-divider"></div>
+
+                        <button id="send-btn" class="send-btn" title="Send" disabled aria-label="Send message">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
                         </button>
                     </div>
                 </div>
-                <p class="input-hint">Your conversations and output paths are saved locally.</p>
+                <p class="input-hint">
+                    <kbd>Enter</kbd> to send &nbsp;·&nbsp; <kbd>Shift+Enter</kbd> for new line &nbsp;·&nbsp; Conversations auto-saved
+                </p>
             </footer>
         </main>
     </div>
 
-    <!-- Scripts -->
     <script src="/static/recorder.js"></script>
     <script src="/static/app.js"></script>
 </body>

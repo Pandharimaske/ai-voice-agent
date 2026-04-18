@@ -210,3 +210,6 @@ __marimo__/
 output/
 data/
 uploads/
+
+# Sample voice recordings (local test only)
+samples/

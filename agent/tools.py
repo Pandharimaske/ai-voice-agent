@@ -1,216 +1,179 @@
 """
 agent/tools.py
 ──────────────
-Concrete tool implementations.
-All filesystem writes are sandboxed to the configured output folder.
+LangChain tools for ARIA.
+Decorated with @tool so the LLM can call them via tool-calling APIs.
+
+Safety: all file operations are sandboxed to the user-selected output folder.
 """
 
 from __future__ import annotations
 
+import os
 import re
-import time
+import subprocess
+import textwrap
 from pathlib import Path
-from typing import List, Optional
+from typing import Optional
 
-from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.tools import tool
 
-
-# ── Helpers ────────────────────────────────────────────────────────────────────
-
-def _sanitize_filename(name: str) -> str:
-    """Remove dangerous characters from user-supplied filenames."""
-    # Strip path traversal
-    name = Path(name).name
-    # Replace spaces and special chars
-    name = re.sub(r"[^\w.\-]", "_", name)
-    return name or "untitled.txt"
+from config.logging_config import logger
 
 
-def _safe_path(filename: str, folder: str) -> Path:
+# ── Path helpers ──────────────────────────────────────────────────────────────
+
+def _safe_path(filename: str, folder: str = "./output") -> Path:
     """
-    Return an absolute Path inside `folder`.
-    Checks if the folder exists; if not, logs that it is creating it.
-    If a file with that name already exists, appends a timestamp suffix.
+    Resolve `filename` inside `folder`, creating the folder if needed.
+    Strips directory traversal components so the LLM can't escape the sandbox.
     """
-    from config.logging_config import logger
-    
-    output_dir = Path(folder)
-    
-    if not output_dir.exists():
-        logger.info(f"Folder '{folder}' does not exist. Creating it now.")
-        output_dir.mkdir(parents=True, exist_ok=True)
-    else:
-        logger.info(f"Using existing folder: '{folder}'")
-
-    clean_name = _sanitize_filename(filename)
-    target = output_dir / clean_name
-
-    if target.exists():
-        stem = target.stem
-        suffix = target.suffix
-        ts = int(time.time())
-        target = output_dir / f"{stem}_{ts}{suffix}"
-
-    return target
+    clean_name = Path(filename).name          # strip any ../ attempts
+    target_dir = Path(folder).resolve()
+    target_dir.mkdir(parents=True, exist_ok=True)
+    return target_dir / clean_name
 
 
-# ── Tool functions ─────────────────────────────────────────────────────────────
+# ── Tools ─────────────────────────────────────────────────────────────────────
 
+@tool
 def create_file(filename: str, content: str = "", folder: str = "./output") -> str:
-    """Create a file with optional content in the output folder."""
-    path = _safe_path(filename, folder)
-    path.write_text(content, encoding="utf-8")
-    return f"✅ File created: `{path}`"
-
-
-def write_code(
-    filename: str,
-    description: str,
-    llm: BaseChatModel,
-    folder: str = "./output",
-) -> str:
     """
-    Generate code via LLM based on `description`, save to `filename`.
-    Returns a preview of the generated code.
+    Creates a new text file with optional content.
+    Use this for: saving notes, creating config files, writing plain-text data.
+
+    Args:
+        filename: Name of the file including extension (e.g., 'notes.txt').
+        content: Text content to write into the file. Can be empty.
+        folder: Target directory. Defaults to './output'.
     """
-    ext_map = {
-        ".py": "Python", ".js": "JavaScript", ".ts": "TypeScript",
-        ".java": "Java", ".cpp": "C++", ".c": "C", ".go": "Go",
-        ".rs": "Rust", ".sh": "Bash", ".sql": "SQL", ".html": "HTML",
-        ".css": "CSS", ".rb": "Ruby", ".php": "PHP",
-    }
-    suffix = Path(filename).suffix.lower()
-    lang = ext_map.get(suffix, "the appropriate language")
-
-    messages = [
-        SystemMessage(content=(
-            f"You are an expert {lang} developer. "
-            "Write clean, well-commented, production-quality code. "
-            "Return ONLY the raw code — no markdown fences, no preamble, no explanation."
-        )),
-        HumanMessage(content=f"Write {lang} code for: {description}"),
-    ]
-
-    response = llm.invoke(messages)
-    code: str = response.content.strip()
-
-    # Strip accidental markdown fences
-    code = re.sub(r"^```[\w]*\n?", "", code)
-    code = re.sub(r"\n?```$", "", code)
-
-    path = _safe_path(filename, folder)
-    path.write_text(code, encoding="utf-8")
-
-    preview = code[:600] + ("\n... (truncated)" if len(code) > 600 else "")
-    return f"✅ Code saved to `{path}`\n\n```{suffix.lstrip('.')}\n{preview}\n```"
-
-
-def summarize_text(text: str, llm: BaseChatModel) -> str:
-    """Summarize provided text using the LLM."""
-    if not text.strip():
-        return "⚠️ No text provided to summarize."
-
-    messages = [
-        SystemMessage(content=(
-            "You are a precise summarizer. "
-            "Provide a clear, structured summary with key points. "
-            "Use bullet points for main ideas. Be concise but comprehensive."
-        )),
-        HumanMessage(content=f"Summarize the following:\n\n{text}"),
-    ]
-
-    response = llm.invoke(messages)
-    return response.content
-
-
-def general_chat(
-    message: str,
-    history: List[dict],
-    llm: BaseChatModel,
-    history_limit: int = 20,
-    stream: bool = False,
-):
-    """
-    Conversational response with session memory.
-    `history` is a list of {role: str, content: str} dicts.
-    If stream=True, returns a generator of tokens.
-    """
-    messages: list = [
-        SystemMessage(content=(
-            "You are ARIA, a helpful voice-controlled AI assistant. "
-            "You can create files, write code, summarize text, and answer questions. "
-            "Be helpful, concise, and friendly."
-        ))
-    ]
-
-    # Inject session history (bounded by limit)
-    for entry in history[-history_limit:]:
-        role = entry.get("role", "")
-        content = entry.get("content", "")
-        if role == "user":
-            messages.append(HumanMessage(content=content))
-        elif role == "assistant":
-            messages.append(AIMessage(content=content))
-
-    messages.append(HumanMessage(content=message))
-    
-    if stream:
-        return llm.stream(messages)
-    
-    response = llm.invoke(messages)
-    return response.content
-
-
-def read_file(filename: str, folder: str = "./output") -> str:
-    """Read the content of a file from the specified folder."""
-    from config.logging_config import logger
-    
-    clean_name = Path(filename).name
-    path = Path(folder) / clean_name
-    
-    if not path.exists():
-        logger.error(f"Read failed: File not found at {path}")
-        return f"❌ Error: File `{filename}` not found in `{folder}`."
-    
     try:
-        content = path.read_text(encoding="utf-8")
-        logger.info(f"Successfully read file: {path}")
-        return f"📖 **Content of `{filename}`:**\n\n```\n{content}\n```"
+        path = _safe_path(filename, folder)
+        path.write_text(content, encoding="utf-8")
+        logger.info(f"Tool: create_file → {path}")
+        size = len(content.encode())
+        return (
+            f"✅ File `{filename}` created successfully in `{folder}`.\n"
+            f"   Size: {size} bytes | Path: `{path}`"
+        )
     except Exception as e:
-        logger.error(f"Read failed for {path}: {str(e)}")
-        return f"❌ Error reading file `{filename}`: {str(e)}"
+        logger.error(f"Tool: create_file failed — {e}")
+        return f"❌ Error creating file: {e}"
 
 
-def run_terminal(command: str) -> str:
-    """Execute a shell command locally and return the output."""
-    import subprocess
-    from config.logging_config import logger
-    
-    logger.info(f"Execution: run_terminal -> '{command}'")
+@tool
+def write_code(filename: str, code: str, folder: str = "./output") -> str:
+    """
+    Generates and saves source code to a file.
+    Use this for: Python scripts, JavaScript, HTML, CSS, shell scripts, or any programming task.
+    The tool automatically strips accidental markdown fences and saves clean code.
+
+    Args:
+        filename: Target filename with extension (e.g., 'app.py', 'index.html').
+        code: The source code content to save.
+        folder: Target directory. Defaults to './output'.
+    """
     try:
-        # We use shell=True for convenience but it requires HITL safety
+        # Strip markdown fences that LLMs sometimes include
+        code = re.sub(r"^```[\w]*\n?", "", code, flags=re.MULTILINE)
+        code = re.sub(r"\n?```$", "", code, flags=re.MULTILINE).strip()
+
+        path = _safe_path(filename, folder)
+        path.write_text(code, encoding="utf-8")
+        logger.info(f"Tool: write_code → {path}")
+
+        lines = code.count("\n") + 1
+        preview = textwrap.shorten(code, width=300, placeholder="…")
+        return (
+            f"✅ Code saved to `{path}`.\n"
+            f"   Lines: {lines} | Language: {Path(filename).suffix.lstrip('.') or 'text'}\n"
+            f"   Preview:\n```\n{preview}\n```"
+        )
+    except Exception as e:
+        logger.error(f"Tool: write_code failed — {e}")
+        return f"❌ Error saving code: {e}"
+
+
+@tool
+def read_file(filename: str, folder: str = "./output") -> str:
+    """
+    Reads the full content of a file from the output folder.
+    Use this FIRST when the user asks to: explain, modify, summarize, debug, or analyze an existing file.
+
+    Args:
+        filename: Name of the file to read (e.g., 'app.py').
+        folder: Source directory. Defaults to './output'.
+    """
+    try:
+        path = _safe_path(filename, folder)
+        if not path.exists():
+            return f"❌ File `{filename}` not found in `{folder}`."
+        content = path.read_text(encoding="utf-8")
+        logger.info(f"Tool: read_file → {path}")
+        size_kb = round(len(content.encode()) / 1024, 1)
+        return f"📖 Content of `{filename}` ({size_kb} KB):\n\n```\n{content}\n```"
+    except Exception as e:
+        logger.error(f"Tool: read_file failed — {e}")
+        return f"❌ Error reading file: {e}"
+
+
+@tool
+def summarize_text(text: str) -> str:
+    """
+    Produces a concise bullet-point summary of the provided text.
+    Use this when the user asks to summarize, condense, or give key points of any text.
+    The summary is returned directly — it does NOT save to a file unless you also call create_file.
+
+    Args:
+        text: The text content to summarize.
+    """
+    # This is a tool that signals intent to the agent — the LLM itself
+    # generates the summary via its own response after this tool is invoked.
+    # We return the raw text so the agent can use it in its final response.
+    logger.info(f"Tool: summarize_text — input length {len(text)} chars")
+    if len(text) < 50:
+        return f"📝 Text is very short. Here it is as-is:\n\n{text}"
+    return f"📝 Text to summarize ({len(text)} chars):\n\n{text}\n\n---\nGenerate a concise summary with bullet points."
+
+
+@tool
+def run_terminal(command: str) -> str:
+    """
+    Executes a safe shell command on the local system.
+    Use this for: running Python scripts, listing files ('ls'), checking versions,
+    installing packages ('pip install'), or any other shell operation.
+
+    Args:
+        command: The exact shell command to run (e.g., 'python app.py', 'ls ./output').
+    """
+    try:
+        logger.info(f"Tool: run_terminal → '{command}'")
         result = subprocess.run(
             command,
             shell=True,
             capture_output=True,
             text=True,
-            timeout=30  # Safety timeout
+            timeout=30,
         )
-        
-        output = result.stdout.strip()
-        error = result.stderr.strip()
-        
+        stdout = result.stdout.strip() if result.stdout else ""
+        stderr = result.stderr.strip() if result.stderr else ""
+
         if result.returncode == 0:
-            logger.info(f"Command successful: {command}")
-            return f"✅ **Command Executed:** `{command}`\n\n```\n{output}\n```"
+            output = stdout or "(no output)"
+            return f"✅ Command ran successfully.\n```\n{output}\n```"
         else:
-            logger.error(f"Command failed with code {result.returncode}: {error}")
-            return f"⚠️ **Command Failed (Code {result.returncode}):**\n\n```\n{error}\n{output}\n```"
-            
+            return (
+                f"⚠️ Command exited with code {result.returncode}.\n"
+                f"stderr:\n```\n{stderr}\n```\n"
+                f"stdout:\n```\n{stdout}\n```"
+            )
     except subprocess.TimeoutExpired:
-        logger.error(f"Command timed out: {command}")
-        return f"❌ **Error:** Command timed out after 30 seconds."
+        return "❌ Command timed out after 30 seconds."
     except Exception as e:
-        logger.error(f"Command error: {str(e)}")
-        return f"❌ **Error executing command:** {str(e)}"
+        logger.error(f"Tool: run_terminal failed — {e}")
+        return f"❌ Error executing command: {e}"
+
+
+# ── Tool registry ─────────────────────────────────────────────────────────────
+
+ALL_TOOLS = [create_file, write_code, read_file, summarize_text, run_terminal]
