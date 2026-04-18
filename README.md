@@ -9,7 +9,7 @@
 [![LangChain](https://img.shields.io/badge/LangChain-0.3.x-1C3C3C?style=for-the-badge&logo=chainlink&logoColor=white)](https://langchain.com)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.136-009688?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
 [![Groq](https://img.shields.io/badge/Groq-Llama_3.3_70B-F55036?style=for-the-badge&logo=meta&logoColor=white)](https://groq.com)
-[![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)](LICENSE)
+[![LangSmith](https://img.shields.io/badge/LangSmith-Observability-FF6B35?style=for-the-badge&logo=chainlink&logoColor=white)](https://smith.langchain.com)
 
 <br/>
 
@@ -333,9 +333,30 @@ Switch providers by editing **two lines** in `config.yaml` — no code changes.
 
 ---
 
-## 📄 License
+## 🔭 Observability with LangSmith
 
-MIT © [Pandhari Maske](https://github.com/Pandharimaske)
+ARIA ships with **zero-config LangSmith tracing** — LangChain and LangGraph automatically detect the env vars and send every run, tool call, and LLM invocation to your LangSmith dashboard.
+
+### Setup (already done if your `.env` has these)
+
+```env
+LANGCHAIN_API_KEY=lsv2_pt_...      # from smith.langchain.com
+LANGSMITH_TRACING_V2=true          # enables automatic tracing
+LANGSMITH_PROJECT=AI-Voice-Agent   # your project name in LangSmith
+```
+
+No code changes needed — the moment the server starts, every pipeline run is visible at **https://smith.langchain.com** with:
+
+| What you see | Details |
+|---|---|
+| **Run traces** | Full STT → Agent → Tools → Response chain |
+| **LLM inputs/outputs** | Every prompt, tool call schema, and completion |
+| **Latency breakdown** | Time spent in each node |
+| **Token usage** | Per-run cost tracking |
+| **Error traces** | Full stack trace on failures |
+| **HITL interrupts** | Visible as checkpoint events |
+
+> 💡 You can tag runs, add feedback scores, and set up evaluators directly from the dashboard — no extra instrumentation needed.
 
 ---
 
