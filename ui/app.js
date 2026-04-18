@@ -214,18 +214,22 @@ document.addEventListener('DOMContentLoaded', () => {
 
     micBtn.addEventListener('click', async () => {
         if (!recorder.isRecording) {
+            setAppStatus("Requesting Mic...", "busy");
             const success = await recorder.start();
             if (success) {
                 micBtn.classList.add('recording');
                 recorderVisualizer.classList.remove('hidden');
                 setAppStatus("Recording...", "busy");
+            } else {
+                alert("Could not access microphone. Please ensure you have granted permission and are using HTTPS or localhost.");
+                setAppStatus("Ready", "ready");
             }
         } else {
             const result = await recorder.stop();
             micBtn.classList.remove('recording');
             recorderVisualizer.classList.add('hidden');
             
-            if (result) {
+            if (result && result.file) {
                 await processTranscription(result.file);
             } else {
                 setAppStatus("Ready", "ready");

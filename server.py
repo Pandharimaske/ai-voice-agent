@@ -2,6 +2,8 @@
 server.py
 ─────────
 ARIA — FastAPI backend.
+Optimized for streaming status updates and total absence of TTS.
+
 Run:  python server.py
 UI:   http://localhost:8000
 """
@@ -27,9 +29,6 @@ from agent.graph import (
     astream_pipeline_text,
     astream_resume_pipeline,
     get_thread_history,
-    resume_pipeline,
-    run_pipeline,
-    run_pipeline_text,
 )
 from config.logging_config import logger
 from config.settings import settings
@@ -56,19 +55,6 @@ class ConfirmRequest(BaseModel):
     confirmed: bool
 
 
-class PipelineResponse(BaseModel):
-    thread_id: str
-    transcript: str
-    intent_result: dict | None
-    tool_results: list
-    messages: list
-    error: str | None
-    is_interrupted: bool
-    interrupt_data: dict | None
-    confirmed: bool | None
-    output_path: str | None = None
-
-
 class TextProcessRequest(BaseModel):
     text: str
     chat_history: list = []
@@ -77,22 +63,6 @@ class TextProcessRequest(BaseModel):
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
-
-def _result_to_response(result: dict, thread_id: str) -> PipelineResponse:
-    """Convert a _read_state dict to a PipelineResponse."""
-    return PipelineResponse(
-        thread_id=thread_id,
-        transcript=result.get("transcript", ""),
-        intent_result=result.get("intent_result"),
-        tool_results=result.get("tool_results", []),
-        messages=result.get("messages", []),
-        error=result.get("error"),
-        is_interrupted=result.get("is_interrupted", False),
-        interrupt_data=result.get("interrupt_data"),
-        confirmed=result.get("confirmed"),
-        output_path=result.get("output_path"),
-    )
-
 
 async def _save_upload(audio: UploadFile) -> str:
     """Save an uploaded audio file to a temp path; caller must unlink."""
@@ -108,6 +78,11 @@ async def _sse_generator(stream_iterator):
     """Wrap an async generator as SSE events."""
     try:
         async for event in stream_iterator:
+            # Detect interrupt state
+            is_interrupted = event.get("confirmed") is None and event.get("intent_result") is not None
+            
+            # Enrich the event for the UI
+            event["is_interrupted"] = is_interrupted
             yield f"data: {json.dumps(event)}\n\n"
     except Exception as e:
         logger.error(f"SSE stream error: {e}")
@@ -126,76 +101,14 @@ async def health():
     return {"status": "ok", "service": "ARIA"}
 
 
-# ── /api/process  (used by the frontend) ─────────────────────────────────────
-
-@app.post("/api/process", response_model=PipelineResponse)
-async def process_audio(
-    audio: UploadFile = File(...),
-    chat_history: str = Form(default="[]"),
-):
-    """
-    Receive audio, run the full pipeline synchronously.
-    Returns either a complete result or an interrupted state awaiting HITL.
-    """
-    try:
-        history = json.loads(chat_history)
-    except Exception:
-        history = []
-
-    tmp_path = await _save_upload(audio)
-    thread_id = str(uuid.uuid4())
-
-    try:
-        logger.info(f"Process audio — thread {thread_id[:8]}")
-        result = run_pipeline(tmp_path, thread_id, history)
-        return _result_to_response(result, thread_id)
-    except Exception as e:
-        logger.error(f"Pipeline error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        try:
-            os.unlink(tmp_path)
-        except Exception:
-            pass
-
-
-# ── /api/confirm  (used by the frontend) ─────────────────────────────────────
-
-@app.post("/api/confirm", response_model=PipelineResponse)
-async def confirm_action(body: ConfirmRequest):
-    """Resume a paused (HITL-interrupted) pipeline."""
-    try:
-        logger.info(f"HITL resume — thread {body.thread_id[:8]} confirmed={body.confirmed}")
-        result = resume_pipeline(body.thread_id, body.confirmed)
-        return _result_to_response(result, body.thread_id)
-    except Exception as e:
-        logger.error(f"Resume error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-# ── /api/process_text  (dev/testing convenience) ─────────────────────────────
-
-@app.post("/api/process_text", response_model=PipelineResponse)
-async def process_text(body: TextProcessRequest):
-    """Run the pipeline on direct text input (skips STT)."""
-    thread_id = body.thread_id or str(uuid.uuid4())
-    try:
-        logger.info(f"Process text — thread {thread_id[:8]}")
-        result = run_pipeline_text(body.text, thread_id, body.chat_history, body.output_path)
-        return _result_to_response(result, thread_id)
-    except Exception as e:
-        logger.error(f"Text pipeline error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-# ── Streaming endpoints (SSE — bonus, not used by default frontend) ───────────
+# ── Streaming endpoints (SSE) ─────────────────────────────────────────────────
 
 @app.post("/api/process_stream")
 async def process_audio_stream(
     audio: UploadFile = File(...),
     chat_history: str = Form(default="[]"),
 ):
-    """Streaming version — emits SSE events as each pipeline stage completes."""
+    """Streaming audio processing — emits SSE events."""
     try:
         history = json.loads(chat_history)
     except Exception:
@@ -219,6 +132,7 @@ async def process_audio_stream(
 
 @app.post("/api/process_text_stream")
 async def process_text_stream(body: TextProcessRequest):
+    """Streaming text processing."""
     thread_id = body.thread_id or str(uuid.uuid4())
     return StreamingResponse(
         _sse_generator(astream_pipeline_text(body.text, thread_id, body.chat_history, body.output_path)),
@@ -228,17 +142,18 @@ async def process_text_stream(body: TextProcessRequest):
 
 @app.post("/api/confirm_stream")
 async def confirm_stream(body: ConfirmRequest):
+    """Streaming HITL confirmation."""
     return StreamingResponse(
         _sse_generator(astream_resume_pipeline(body.thread_id, body.confirmed)),
         media_type="text/event-stream",
     )
 
 
-# ── Transcribe only ───────────────────────────────────────────────────────────
+# ── STT only ──────────────────────────────────────────────────────────────────
 
 @app.post("/api/transcribe")
 async def transcribe_audio(audio: UploadFile = File(...)):
-    """STT only — useful for testing transcription quality."""
+    """STT only — used for live voice transcription in UI."""
     tmp_path = await _save_upload(audio)
     try:
         from agent.stt import get_stt
@@ -247,6 +162,7 @@ async def transcribe_audio(audio: UploadFile = File(...)):
         transcript = stt.transcribe(tmp_path)
         return {"transcript": transcript}
     except Exception as e:
+        logger.error(f"STT Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         try:
@@ -259,7 +175,7 @@ async def transcribe_audio(audio: UploadFile = File(...)):
 
 @app.get("/api/sessions")
 async def list_sessions():
-    """List all past thread IDs from the SQLite checkpointer."""
+    """List all past thread IDs."""
     import sqlite3
     db_path = str(settings.db_path)
     if not os.path.exists(db_path):
@@ -267,9 +183,7 @@ async def list_sessions():
     try:
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
-        cursor.execute(
-            "SELECT DISTINCT thread_id FROM checkpoints ORDER BY checkpoint_id DESC"
-        )
+        cursor.execute("SELECT DISTINCT thread_id FROM checkpoints ORDER BY checkpoint_id DESC")
         sessions = [{"thread_id": row[0]} for row in cursor.fetchall()]
         conn.close()
         return sessions
@@ -279,37 +193,11 @@ async def list_sessions():
 
 @app.get("/api/sessions/{thread_id}")
 async def get_session(thread_id: str):
-    """Return the full state for a specific past session."""
+    """Return the full state for a specific thread."""
     try:
         return get_thread_history(thread_id)
     except Exception as e:
         raise HTTPException(status_code=404, detail=str(e))
-
-
-# ── TTS (optional) ────────────────────────────────────────────────────────────
-
-class TTSRequest(BaseModel):
-    text: str
-    lang: str = "en"
-
-
-@app.post("/api/tts")
-async def text_to_speech(body: TTSRequest):
-    """Convert text to speech (requires: pip install gtts)."""
-    try:
-        from gtts import gTTS
-        import io
-        clean = re.sub(r"```[\s\S]*?```", "", body.text)
-        clean = re.sub(r"[`*#]", "", clean).strip()
-        tts = gTTS(text=clean, lang=body.lang)
-        buf = io.BytesIO()
-        tts.write_to_fp(buf)
-        buf.seek(0)
-        return StreamingResponse(buf, media_type="audio/mpeg")
-    except ImportError:
-        raise HTTPException(status_code=501, detail="Install gtts: pip install gtts")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ── Entry ─────────────────────────────────────────────────────────────────────
