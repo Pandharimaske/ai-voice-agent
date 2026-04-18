@@ -16,6 +16,7 @@ from __future__ import annotations
 import os
 from abc import ABC, abstractmethod
 from pathlib import Path
+from typing import Optional
 
 
 class BaseSTT(ABC):
@@ -90,9 +91,6 @@ class OpenAISTT(BaseSTT):
 
 
 # ── Factory ────────────────────────────────────────────────────────────────────
-
-from typing import Optional
-
 
 def get_stt(provider: str, model: str, api_key: Optional[str] = None) -> BaseSTT:
     """

@@ -1,45 +1,38 @@
+"""
+config/logging_config.py
+─────────────────────────
+Centralised logger for ARIA.
+Import anywhere:  from config.logging_config import logger
+"""
+
 import logging
 import sys
 from pathlib import Path
 
-def setup_logging(level=logging.INFO):
-    """Set up the logging configuration for the entire application."""
-    
-    # Create logs directory if it doesn't exist
-    log_dir = Path(__file__).parent.parent / "logs"
-    log_dir.mkdir(exist_ok=True)
-    
-    # Define the format
-    log_format = logging.Formatter(
-        "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S"
-    )
+# ── Log file ──────────────────────────────────────────────────────────────────
+LOG_DIR = Path("data")
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+LOG_FILE = LOG_DIR / "aria.log"
 
-    # Console Handler
-    console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setFormatter(log_format)
+# ── Formatter ─────────────────────────────────────────────────────────────────
+formatter = logging.Formatter(
+    fmt="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
 
-    # File Handler
-    file_handler = logging.FileHandler(log_dir / "aria.log")
-    file_handler.setFormatter(log_format)
+# ── Handlers ──────────────────────────────────────────────────────────────────
+console_handler = logging.StreamHandler(sys.stdout)
+console_handler.setFormatter(formatter)
+console_handler.setLevel(logging.INFO)
 
-    # Root Logger Setup
-    root_logger = logging.getLogger()
-    root_logger.setLevel(level)
-    
-    # Clear existing handlers to avoid duplicates
-    if root_logger.hasHandlers():
-        root_logger.handlers.clear()
-        
-    root_logger.addHandler(console_handler)
-    root_logger.addHandler(file_handler)
+file_handler = logging.FileHandler(LOG_FILE, encoding="utf-8")
+file_handler.setFormatter(formatter)
+file_handler.setLevel(logging.DEBUG)
 
-    # Silence verbose third-party loggers
-    logging.getLogger("uvicorn").setLevel(logging.INFO)
-    logging.getLogger("httpx").setLevel(logging.WARNING)
-    logging.getLogger("httpcore").setLevel(logging.WARNING)
-
-    logging.info("Logging system initialized.")
-
-setup_logging()
+# ── Root logger ───────────────────────────────────────────────────────────────
 logger = logging.getLogger("ARIA")
+logger.setLevel(logging.DEBUG)
+
+if not logger.handlers:
+    logger.addHandler(console_handler)
+    logger.addHandler(file_handler)
