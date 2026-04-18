@@ -13,13 +13,76 @@
 
 <br/>
 
-> **Speak a command. Watch ARIA think. See it happen.**  
-> A production-grade, voice-controlled local AI agent with real-time pipeline visualization,  
+> **Speak a command. Watch ARIA think. See it happen.**
+> A production-grade, voice-controlled local AI agent with real-time pipeline visualization,
 > Human-in-the-Loop safety controls, and persistent session memory.
 
 <br/>
 
 </div>
+
+---
+
+## 📋 Assignment Requirements Checklist
+
+> Every requirement from the spec — plus all 5 bonus items — is implemented.
+
+### Core Requirements
+
+| # | Requirement | Status | Implementation |
+|---|---|---|---|
+| 1a | Microphone input | ✅ | `MediaRecorder` API in `recorder.js` with live waveform visualizer |
+| 1b | Audio file upload (.wav / .mp3) | ✅ | 📂 upload button → `POST /api/process_stream` |
+| 2 | Speech-to-Text (Whisper) | ✅ | Groq `whisper-large-v3` via `agent/stt.py` *(see hardware note below)* |
+| 3 | Intent understanding via LLM | ✅ | Llama 3.3 70B tool-calling via Groq *(see hardware note below)* |
+| 3a | Create file intent | ✅ | `create_file` tool |
+| 3b | Write code intent | ✅ | `write_code` tool |
+| 3c | Summarize text intent | ✅ | `summarize_text` tool |
+| 3d | General chat intent | ✅ | No-tool path in `agent_node` |
+| 4 | File operations | ✅ | Sandboxed to `output/` via `_safe_path()` |
+| 4a | Code generation | ✅ | `write_code` strips markdown fences, saves clean code |
+| 4b | Text summarization | ✅ | `summarize_text` tool → LLM generates bullet points |
+| 5 | Web UI | ✅ | FastAPI + custom HTML/CSS/JS (no Streamlit dependency) |
+| 5a | Transcribed text displayed | ✅ | Shown in user message bubble + pipeline tracker |
+| 5b | Detected intent displayed | ✅ | Animated badge on every user message |
+| 5c | Action taken displayed | ✅ | Logged in `action_taken` state field, shown in pipeline |
+| 5d | Final output / result | ✅ | Agent's final response shown in chat; output files panel auto-refreshes |
+
+### Bonus Features (All 5 Implemented)
+
+| Bonus | Status | Implementation |
+|---|---|---|
+| ✦ Compound Commands | ✅ | Chain multiple tools in one utterance; intent badge accumulates: `📖 Read File + 💻 Write Code + 📄 Create File` |
+| ✦ Human-in-the-Loop | ✅ | LangGraph `interrupt()` inside `agent_node` — UI shows action summary before any file/code/command executes |
+| ✦ Graceful Degradation | ✅ | All tools wrapped in `try/except`; STT failures return `❌` messages; unintelligible audio falls through to general chat |
+| ✦ Memory | ✅ | `AsyncSqliteSaver` checkpointer — full session history persisted in SQLite; sessions loadable and deletable from sidebar |
+| ✦ Additional tools | ✅ | `read_file` + `run_terminal` beyond the minimum spec |
+
+---
+
+## 🔧 Hardware Note — Why Groq instead of Ollama?
+
+> *The assignment asks for a local/HuggingFace model but explicitly allows an API if hardware is a constraint. Here is the documented reasoning:*
+
+**STT — Groq `whisper-large-v3` instead of local Whisper:**
+- Running `whisper-large-v3` locally requires ~6 GB VRAM and significant CPU time per transcription.
+- Groq's Whisper inference is **10–50× faster** than CPU-based local Whisper at the same accuracy.
+- The `agent/stt.py` abstraction is **provider-agnostic** — swap `provider: "openai"` in `config.yaml` to use OpenAI's Whisper API, or change the code to load a local HuggingFace pipeline with one function.
+
+**LLM — Groq `llama-3.3-70b-versatile` instead of Ollama:**
+- Llama 3.3 70B requires ~40 GB VRAM (or ~80 GB in 4-bit) to run locally.
+- Smaller local models (7B–13B) via Ollama were tested but **consistently failed structured tool-calling**, producing malformed JSON or hallucinated function names.
+- The `agent/llm.py` factory supports Ollama out of the box — set `provider: "ollama"` and `model: "llama3.2"` in `config.yaml` to switch if your hardware supports it.
+
+---
+
+## 🎬 Deliverables
+
+| Deliverable | Link |
+|---|---|
+| 📦 **Code Repository** | [github.com/Pandharimaske/ai-voice-agent](https://github.com/Pandharimaske/ai-voice-agent) |
+| 🎥 **Video Demo** | *(add YouTube unlisted link here)* |
+| 📝 **Technical Article** | *(add Substack / Dev.to / Medium link here)* |
 
 ---
 
@@ -37,50 +100,38 @@ All of this runs through a sleek dark-mode UI with a real-time pipeline tracker,
 
 ---
 
-## 🎬 Demo
-
-| Feature | Screenshot |
-|---|---|
-| Voice input → pipeline tracker → response | *(record your own demo)* |
-| HITL confirmation dialog | *(record your own demo)* |
-| Output files auto-appearing in sidebar | *(record your own demo)* |
-
-> 🎙️ **Sample voice commands** are included in `samples/` — use them to test file upload instantly.
-
----
-
 ## 🏗️ Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                         ARIA Pipeline                                │
-│                                                                     │
-│   Audio / Text Input                                                │
-│          │                                                          │
-│   ┌──────▼──────┐                                                   │
-│   │  STT Node   │  Groq Whisper-large-v3 → plain text transcript   │
-│   └──────┬──────┘                                                   │
-│          │ transcript                                               │
-│   ┌──────▼──────┐        ┌──────────────┐                          │
-│   │ Agent Node  │◄──────►│  Tools Node  │  LangGraph ReAct loop    │
-│   │  (LLM +     │        │  (ToolNode)  │                          │
-│   │   Tools)    │        └──────────────┘                          │
-│   └──────┬──────┘                                                   │
-│          │                                                          │
-│    [HITL needed?]                                                   │
-│     ├─ YES ──► interrupt() ──► UI confirmation dialog               │
-│     │          Command(resume=True/False) ──► continue/cancel       │
-│     └─ NO  ──► stream final response to UI                          │
-│                                                                     │
-│   Persistence: AsyncSqliteSaver (LangGraph checkpointer)           │
-└─────────────────────────────────────────────────────────────────────┘
++---------------------------------------------------------------------+
+|                         ARIA Pipeline                               |
+|                                                                     |
+|   Audio / Text Input                                                |
+|          |                                                          |
+|   +------+------+                                                   |
+|   |  STT Node   |  Groq Whisper-large-v3 -> plain text transcript  |
+|   +------+------+                                                   |
+|          | transcript                                               |
+|   +------+------+        +--------------+                          |
+|   | Agent Node  |<------►|  Tools Node  |  LangGraph ReAct loop    |
+|   |  (LLM +     |        |  (ToolNode)  |                          |
+|   |   Tools)    |        +--------------+                          |
+|   +------+------+                                                   |
+|          |                                                          |
+|    [HITL needed?]                                                   |
+|     +- YES --> interrupt() --> UI confirmation dialog               |
+|     |          Command(resume=True/False) --> continue/cancel       |
+|     +- NO  --> stream final response to UI                         |
+|                                                                     |
+|   Persistence: AsyncSqliteSaver (LangGraph checkpointer)           |
++---------------------------------------------------------------------+
 ```
 
-### Graph Topology
+### Graph Topology (4 nodes)
 
 ```
-START ──► stt ──► agent ◄──► tools
-                   │
+START --> stt --> agent <--> tools
+                   |
                   END
 ```
 
@@ -93,13 +144,13 @@ The **Agent node** is the single source of truth for:
 
 ## 🛠️ Tools
 
-| Tool | Intent Badge | Description |
-|---|---|---|
-| `create_file` | 📄 Create File | Creates text/config/note files |
-| `write_code` | 💻 Write Code | Generates & saves source code (any language) |
-| `read_file` | 📖 Read File | Reads existing files for analysis/debug |
-| `summarize_text` | 📝 Summarize Text | Bullet-point summarization |
-| `run_terminal` | ⚡ Run Command | Executes shell commands with 30s timeout |
+| Tool | Intent Badge | Triggers HITL? | Description |
+|---|---|---|---|
+| `create_file` | 📄 Create File | ✅ Yes | Creates text/config/note files |
+| `write_code` | 💻 Write Code | ✅ Yes | Generates & saves source code (any language) |
+| `read_file` | 📖 Read File | ❌ No | Reads existing files for analysis/debug |
+| `summarize_text` | 📝 Summarize Text | ❌ No | Bullet-point summarization |
+| `run_terminal` | ⚡ Run Command | ✅ Yes | Executes shell commands with 30s timeout |
 
 **Compound commands** are fully supported — say *"Read my script, summarize it, then save the summary"* and ARIA chains all 3 tools automatically. The intent badge accumulates: `📖 Read File + 📝 Summarize Text + 📄 Create File`.
 
@@ -107,20 +158,22 @@ The **Agent node** is the single source of truth for:
 
 ## 🔒 Human-in-the-Loop (HITL)
 
-Powered by LangGraph's **`interrupt()`** function (0.4.x pattern — not the old `interrupt_before` node):
+Powered by LangGraph's **`interrupt()`** function (0.4.x pattern — not the deprecated `interrupt_before` node):
 
 ```
-Agent decides to write_code → interrupt() called inside agent_node
-                            ↓
-           UI shows confirmation dialog with action summary
-                            ↓
-         User clicks ✅ Confirm  →  Command(resume=True)  → tool executes
-         User clicks ✗ Cancel   →  Command(resume=False) → clean cancellation
-                                   (returns AIMessage with no tool_calls,
-                                    so the graph routes to END correctly)
+Agent decides to write_code
+          |
+   interrupt() called inside agent_node
+          |
+   UI shows confirmation dialog with exact action summary
+          |
+   User clicks [Confirm]  -->  Command(resume=True)  --> tool executes
+   User clicks [Cancel]   -->  Command(resume=False) --> clean cancellation
+                               (returns fresh AIMessage with no tool_calls
+                                so _should_continue() routes to END, not tools)
 ```
 
-> ⚠️ **Critical design note**: On cancellation, ARIA returns a fresh `AIMessage` (not the original response with `tool_calls`). This ensures `_should_continue()` routes to `END` instead of the tools node — preventing the cancelled action from executing anyway.
+> ⚠️ **Critical bug this design solves**: On cancellation, ARIA returns a clean `AIMessage` with no `tool_calls`. If it returned the original LLM response (which *does* have `tool_calls`), the graph router would still execute the cancelled tools — defeating the purpose of the confirmation.
 
 ---
 
@@ -150,6 +203,7 @@ ai-voice-agent/
 │
 ├── server.py              # FastAPI app (lifespan, SSE, REST endpoints)
 ├── config.yaml            # Single config file — swap models in one line
+├── .env.example           # API key template (copy to .env)
 ├── pyproject.toml         # uv/pip project definition
 └── .env                   # API keys (never committed)
 ```
@@ -164,7 +218,7 @@ ai-voice-agent/
 git clone https://github.com/Pandharimaske/ai-voice-agent.git
 cd ai-voice-agent
 
-# Install uv (if not already installed)
+# Install uv (recommended — fast Python package manager)
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
 # Install all dependencies
@@ -174,32 +228,35 @@ uv sync
 ### 2 · Configure API keys
 
 ```bash
-cp .env.example .env   # or create .env manually
+cp .env.example .env
 ```
 
 ```env
-# .env
-GROQ_API_KEY=gsk_...          # Required — get from console.groq.com
-OPENAI_API_KEY=sk-...         # Optional — only if using OpenAI provider
-ANTHROPIC_API_KEY=sk-ant-...  # Optional — only if using Anthropic provider
+# Required
+GROQ_API_KEY=gsk_...
+
+# Optional — LangSmith observability
+LANGCHAIN_API_KEY=lsv2_pt_...
+LANGSMITH_TRACING_V2=true
+LANGSMITH_PROJECT=AI-Voice-Agent
 ```
 
 ### 3 · (Optional) Swap models
 
-Edit `config.yaml` — no code changes needed:
+Edit `config.yaml` — zero code changes needed:
 
 ```yaml
 stt:
   provider: "groq"
-  model: "whisper-large-v3"       # or "openai" + "whisper-1"
+  model: "whisper-large-v3"         # or "openai" + "whisper-1"
 
 llm:
   provider: "groq"
-  model: "llama-3.3-70b-versatile" # or "openai"/"gpt-4o" or "ollama"/"llama3.2"
+  model: "llama-3.3-70b-versatile"  # or "openai"/"gpt-4o" or "ollama"/"llama3.2"
   temperature: 0.1
 
 hitl:
-  enabled: true   # set false to skip confirmations
+  enabled: true    # set false to skip confirmations
 ```
 
 ### 4 · Run
@@ -217,12 +274,12 @@ Open **http://localhost:8000** 🎉
 | Feature | Description |
 |---|---|
 | **Pipeline Steps Bar** | Live tracker: `🎤 Transcribe → 🧠 Reason → ⚡ Execute → ✅ Done` |
-| **Intent Badges** | Shows all tools used per turn — accumulates: `📖 Read File + 💻 Write Code` |
+| **Intent Badges** | Per-turn badge accumulates all tools: `📖 Read File + 💻 Write Code` |
 | **Voice Recording** | Click 🎙️ to record via mic with live waveform visualizer |
 | **File Upload** | Click 📂 to upload any `.wav` / `.mp3` audio file |
-| **HITL Dialog** | Confirms destructive actions before execution |
+| **HITL Dialog** | Confirms destructive actions with full action summary before execution |
 | **Session Sidebar** | Full history with one-click load & 🗑️ delete |
-| **Output Files Panel** | Auto-refreshes after every tool run — shows files created |
+| **Output Files Panel** | Auto-refreshes after every tool run |
 | **Output Path Selector** | Switch / add output folders without restarting |
 
 ---
@@ -235,27 +292,27 @@ Open **http://localhost:8000** 🎉
 | `GET` | `/health` | Health check |
 | `POST` | `/api/process_text_stream` | Text → SSE stream of agent updates |
 | `POST` | `/api/process_stream` | Audio upload → SSE stream |
-| `POST` | `/api/transcribe` | Audio → transcript only |
+| `POST` | `/api/transcribe` | Audio → transcript only (no agent) |
 | `POST` | `/api/confirm` | Resume HITL (`{thread_id, confirmed: bool}`) |
 | `GET` | `/api/sessions` | List all saved sessions |
 | `GET` | `/api/sessions/{id}` | Load a specific session |
-| `DELETE` | `/api/sessions/{id}` | Delete a session from SQLite |
+| `DELETE` | `/api/sessions/{id}` | Delete session from SQLite |
 | `GET` | `/api/output_files` | List files in output folder |
 
-All streaming endpoints return **Server-Sent Events (SSE)** with this payload per event:
+**SSE event payload:**
 
 ```jsonc
 {
   "thread_id": "uuid",
-  "transcript": "what the user said",
-  "detected_intent": "📖 Read File + 💻 Write Code",
-  "action_taken": "  • write_code(filename='app.py', ...)",
+  "transcript": "Create a Python file with a retry function",
+  "detected_intent": "💻 Write Code + 📄 Create File",
+  "action_taken": "  • write_code(filename='retry.py', ...)",
   "messages": [
-    { "role": "user",      "content": "...", "intent": "💻 Write Code" },
-    { "role": "assistant", "content": "Done! Here's what I created..." }
+    { "role": "user",      "content": "...", "intent": "💻 Write Code + 📄 Create File" },
+    { "role": "assistant", "content": "Done! Saved retry.py to ./output" }
   ],
-  "is_interrupted": false,
-  "interrupt_data": null,
+  "is_interrupted": true,
+  "interrupt_data": { "message": "Confirm?", "tool_names": ["write_code"] },
   "output_path": "./output",
   "error": null
 }
@@ -265,61 +322,61 @@ All streaming endpoints return **Server-Sent Events (SSE)** with this payload pe
 
 ## 🧠 Technical Design Decisions
 
-### `add_messages` Reducer
+### `add_messages` Reducer (LangGraph 0.4)
 ```python
-# agent/state.py
 class AgentState(TypedDict, total=False):
-    messages: Annotated[List, add_messages]  # LG 0.4 — dedupes by message ID
+    messages: Annotated[List, add_messages]  # ID-based dedup on checkpoint restore
 ```
-Using `add_messages` from `langgraph.graph.message` instead of `operator.add` ensures proper ID-based deduplication when checkpoints are restored — no duplicate messages on resume.
 
-### `interrupt()` instead of `interrupt_before`
+### `interrupt()` — Code-level HITL (not `interrupt_before`)
 ```python
-# agent/nodes.py — called INSIDE agent_node, not as a graph config option
-confirmed = interrupt({"message": "...", "actions_summary": "...", "tool_names": [...]})
+# Runs INSIDE agent_node — granular, condition-based
+confirmed = interrupt({"message": "...", "tool_names": [...]})
 if not confirmed:
     return {"messages": [AIMessage(content="Cancelled.")]}  # no tool_calls!
 ```
-The LangGraph 0.4 `interrupt()` function gives **code-level control** over exactly when and why a graph pauses — no static node list needed.
 
-### LRU-cached LLM
-```python
-@functools.lru_cache(maxsize=1)
-def _get_llm_with_tools():
-    ...  # runs exactly once, thread-safe
+### Intent Accumulation Across ReAct Passes
+```
+Pass 1: LLM calls read_file   → detected_intent = "📖 Read File"
+Pass 2: LLM calls write_code  → detected_intent = "📖 Read File + 💻 Write Code"
+New turn starts               → reset to None
 ```
 
-### Intent Accumulation
-Each ReAct loop pass merges its tool labels into the existing `detected_intent`:
-```
-Turn 1 pass: read_file  → "📖 Read File"
-Turn 1 pass: write_code → "📖 Read File + 💻 Write Code"
-Turn 2 starts          → reset to None, starts fresh
-```
-
-### FastAPI Lifespan
+### FastAPI Lifespan for AsyncSqliteSaver
 ```python
 @asynccontextmanager
 async def lifespan(app):
-    async with AsyncSqliteSaver.from_conn_string(str(settings.db_path)) as saver:
-        init_graph(saver)
-        yield
-    # saver.close() called automatically
+    async with AsyncSqliteSaver.from_conn_string(db_path) as saver:
+        init_graph(saver)  # compile graph once
+        yield              # serve requests
+    # connection closed automatically on shutdown
 ```
-Replaces fragile global singletons — the SQLite connection is opened and closed cleanly with the app lifecycle.
 
 ---
 
 ## ⚙️ Supported Model Providers
 
-| Provider | LLM Examples | STT |
+| Provider | LLM | STT |
 |---|---|---|
-| **Groq** ⭐ | `llama-3.3-70b-versatile`, `mixtral-8x7b` | `whisper-large-v3` |
+| **Groq** ⭐ recommended | `llama-3.3-70b-versatile`, `mixtral-8x7b` | `whisper-large-v3` |
 | **OpenAI** | `gpt-4o`, `gpt-4o-mini` | `whisper-1` |
 | **Anthropic** | `claude-3-5-sonnet-20241022` | — |
-| **Ollama** | `llama3.2`, `mistral`, `codellama` | — |
+| **Ollama** (local) | `llama3.2`, `mistral`, `codellama` | — |
 
-Switch providers by editing **two lines** in `config.yaml` — no code changes.
+---
+
+## 🔭 Observability with LangSmith
+
+ARIA ships with **zero-config LangSmith tracing** — LangChain and LangGraph automatically pick up these env vars:
+
+```env
+LANGCHAIN_API_KEY=lsv2_pt_...
+LANGSMITH_TRACING_V2=true
+LANGSMITH_PROJECT=AI-Voice-Agent
+```
+
+Every pipeline run is visible at **https://smith.langchain.com** with full STT → Agent → Tools → Response traces, token usage, latency breakdowns, and HITL checkpoint events.
 
 ---
 
@@ -330,33 +387,6 @@ Switch providers by editing **two lines** in `config.yaml` — no code changes.
 - [ ] Multi-file context (RAG over output folder)
 - [ ] Plugin system for custom tools
 - [ ] Docker compose for one-command deploy
-
----
-
-## 🔭 Observability with LangSmith
-
-ARIA ships with **zero-config LangSmith tracing** — LangChain and LangGraph automatically detect the env vars and send every run, tool call, and LLM invocation to your LangSmith dashboard.
-
-### Setup (already done if your `.env` has these)
-
-```env
-LANGCHAIN_API_KEY=lsv2_pt_...      # from smith.langchain.com
-LANGSMITH_TRACING_V2=true          # enables automatic tracing
-LANGSMITH_PROJECT=AI-Voice-Agent   # your project name in LangSmith
-```
-
-No code changes needed — the moment the server starts, every pipeline run is visible at **https://smith.langchain.com** with:
-
-| What you see | Details |
-|---|---|
-| **Run traces** | Full STT → Agent → Tools → Response chain |
-| **LLM inputs/outputs** | Every prompt, tool call schema, and completion |
-| **Latency breakdown** | Time spent in each node |
-| **Token usage** | Per-run cost tracking |
-| **Error traces** | Full stack trace on failures |
-| **HITL interrupts** | Visible as checkpoint events |
-
-> 💡 You can tag runs, add feedback scores, and set up evaluators directly from the dashboard — no extra instrumentation needed.
 
 ---
 
