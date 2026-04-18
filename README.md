@@ -1,216 +1,350 @@
-# ARIA — Audio Reasoning Intelligence Agent
+<div align="center">
 
-> A voice-controlled local AI agent: speak a command → transcribe → classify intent → execute tools → see results.
+<img src="https://capsule-render.vercel.app/api?type=waving&color=7c6aff&height=200&section=header&text=ARIA&fontSize=90&fontColor=ffffff&fontAlignY=38&desc=Audio%20Reasoning%20Intelligence%20Agent&descAlignY=60&descSize=22&animation=fadeIn" width="100%"/>
+
+<br/>
+
+[![Python](https://img.shields.io/badge/Python-3.11+-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
+[![LangGraph](https://img.shields.io/badge/LangGraph-0.4.x-7c6aff?style=for-the-badge&logo=chainlink&logoColor=white)](https://langchain-ai.github.io/langgraph/)
+[![LangChain](https://img.shields.io/badge/LangChain-0.3.x-1C3C3C?style=for-the-badge&logo=chainlink&logoColor=white)](https://langchain.com)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.136-009688?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
+[![Groq](https://img.shields.io/badge/Groq-Llama_3.3_70B-F55036?style=for-the-badge&logo=meta&logoColor=white)](https://groq.com)
+[![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)](LICENSE)
+
+<br/>
+
+> **Speak a command. Watch ARIA think. See it happen.**  
+> A production-grade, voice-controlled local AI agent with real-time pipeline visualization,  
+> Human-in-the-Loop safety controls, and persistent session memory.
+
+<br/>
+
+</div>
 
 ---
 
-## Demo
+## ✨ What is ARIA?
 
-[![Demo Video](https://img.shields.io/badge/▶_Watch_Demo-YouTube-red?style=for-the-badge)](YOUR_YOUTUBE_LINK)
-[![Article](https://img.shields.io/badge/📝_Read_Article-Dev.to-black?style=for-the-badge)](YOUR_ARTICLE_LINK)
+**ARIA** (Audio Reasoning Intelligence Agent) is a fully local, voice-controlled AI agent that:
+
+1. 🎤 **Hears** your voice or accepts typed commands
+2. 🧠 **Reasons** using a 70B LLM with 5 specialized tools
+3. ⚡ **Acts** — creates files, writes code, reads files, summarizes text, runs commands
+4. 🔒 **Asks** before doing anything destructive (Human-in-the-Loop)
+5. 💾 **Remembers** every session in a local SQLite database
+
+All of this runs through a sleek dark-mode UI with a real-time pipeline tracker, animated intent badges, and session management.
 
 ---
 
-## Architecture
+## 🎬 Demo
+
+| Feature | Screenshot |
+|---|---|
+| Voice input → pipeline tracker → response | *(record your own demo)* |
+| HITL confirmation dialog | *(record your own demo)* |
+| Output files auto-appearing in sidebar | *(record your own demo)* |
+
+> 🎙️ **Sample voice commands** are included in `samples/` — use them to test file upload instantly.
+
+---
+
+## 🏗️ Architecture
 
 ```
-Audio Input (mic / file upload)
-         │
-    ┌────▼────┐
-    │  STT    │  Groq Whisper API / OpenAI Whisper
-    └────┬────┘
-         │  transcript
-    ┌────▼────┐
-    │  Intent │  LLM + Pydantic structured output → IntentResult
-    └────┬────┘
-         │
-   [HITL needed?]
-    ├── YES → ┌────────┐  interrupt()   ┌─────────────┐
-    │         │  HITL  │ ─────────────► │  Web UI JS  │  Confirm / Cancel
-    │         └────┬───┘ ◄──────────── └─────────────┘
-    └── NO   ──────┘
+┌─────────────────────────────────────────────────────────────────────┐
+│                         ARIA Pipeline                                │
+│                                                                     │
+│   Audio / Text Input                                                │
+│          │                                                          │
+│   ┌──────▼──────┐                                                   │
+│   │  STT Node   │  Groq Whisper-large-v3 → plain text transcript   │
+│   └──────┬──────┘                                                   │
+│          │ transcript                                               │
+│   ┌──────▼──────┐        ┌──────────────┐                          │
+│   │ Agent Node  │◄──────►│  Tools Node  │  LangGraph ReAct loop    │
+│   │  (LLM +     │        │  (ToolNode)  │                          │
+│   │   Tools)    │        └──────────────┘                          │
+│   └──────┬──────┘                                                   │
+│          │                                                          │
+│    [HITL needed?]                                                   │
+│     ├─ YES ──► interrupt() ──► UI confirmation dialog               │
+│     │          Command(resume=True/False) ──► continue/cancel       │
+│     └─ NO  ──► stream final response to UI                          │
+│                                                                     │
+│   Persistence: AsyncSqliteSaver (LangGraph checkpointer)           │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Graph Topology
+
+```
+START ──► stt ──► agent ◄──► tools
                    │
-    ┌──────────────▼──────────┐
-    │       Tool Router       │  compound commands supported
-    ├── create_file           │
-    ├── write_code            │
-    ├── summarize             │
-    └── general_chat          │
-    └─────────────────────────┘
-         │
-    ┌────▼────┐
-    │ Web UI  │  Transcript · Intent · Action · Result · Chat history
-    └─────────┘
+                  END
 ```
 
-### Key Design Decisions
-
-| Layer | Choice | Reason |
-|-------|--------|--------|
-| **STT** | Groq Whisper API | Local Whisper requires 4–8 GB VRAM; Groq provides ~300× realtime speed at zero cost |
-| **LLM** | Groq (default) / OpenAI / Anthropic | Configurable via `config.yaml` — one-line swap |
-| **Structured output** | Pydantic `IntentResult` + `.with_structured_output()` | Type-safe, validated intent extraction |
-| **Orchestration** | LangGraph | State machine with checkpointing, clean HITL interrupt |
-| **Checkpointer** | SQLite | Zero-dependency persistent storage for HITL state |
-| **UI** | Custom Web Frontend | Premium HTML/CSS/JS + FastAPI backend for full control over aesthetics |
+The **Agent node** is the single source of truth for:
+- Tool selection & reasoning (LLM)
+- Intent classification & accumulation
+- HITL interrupt control via `interrupt()`
 
 ---
 
-## Features
+## 🛠️ Tools
 
-- 🎙️ **Dual audio input** — microphone or file upload (.wav, .mp3, .m4a, ...)
-- 🧠 **Intent classification** — powered by Pydantic structured output
-- 📋 **Compound commands** — "write a sort function AND save it to sort.py" works natively
-- ⚡ **Human-in-the-Loop** — confirmation dialog before any filesystem operation
-- 💾 **SQLite checkpointing** — HITL state survives across UI interactions
-- 🔁 **Session memory** — chat history maintained across turns
-- 🛡️ **Sandboxed output** — ALL file writes go to `./output/` (configurable)
-- 🔧 **One-config swap** — change `config.yaml` to switch provider/model
+| Tool | Intent Badge | Description |
+|---|---|---|
+| `create_file` | 📄 Create File | Creates text/config/note files |
+| `write_code` | 💻 Write Code | Generates & saves source code (any language) |
+| `read_file` | 📖 Read File | Reads existing files for analysis/debug |
+| `summarize_text` | 📝 Summarize Text | Bullet-point summarization |
+| `run_terminal` | ⚡ Run Command | Executes shell commands with 30s timeout |
 
-### Supported Intents
-
-| Intent | Example command |
-|--------|----------------|
-| `create_file` | "Create a file called notes.txt" |
-| `write_code` | "Write a Python retry decorator and save it to retry.py" |
-| `summarize` | "Summarize this: [text]" |
-| `general_chat` | "What's the difference between RAG and fine-tuning?" |
-| **Compound** | "Write a Fibonacci function AND save it to fib.py AND create a README" |
+**Compound commands** are fully supported — say *"Read my script, summarize it, then save the summary"* and ARIA chains all 3 tools automatically. The intent badge accumulates: `📖 Read File + 📝 Summarize Text + 📄 Create File`.
 
 ---
 
-## Setup
+## 🔒 Human-in-the-Loop (HITL)
 
-### 1. Clone & install
+Powered by LangGraph's **`interrupt()`** function (0.4.x pattern — not the old `interrupt_before` node):
 
-```bash
-git clone https://github.com/YOUR_USERNAME/ARIA
-cd ARIA
-pip install -r requirements.txt
+```
+Agent decides to write_code → interrupt() called inside agent_node
+                            ↓
+           UI shows confirmation dialog with action summary
+                            ↓
+         User clicks ✅ Confirm  →  Command(resume=True)  → tool executes
+         User clicks ✗ Cancel   →  Command(resume=False) → clean cancellation
+                                   (returns AIMessage with no tool_calls,
+                                    so the graph routes to END correctly)
 ```
 
-### 2. Configure
+> ⚠️ **Critical design note**: On cancellation, ARIA returns a fresh `AIMessage` (not the original response with `tool_calls`). This ensures `_should_continue()` routes to `END` instead of the tools node — preventing the cancelled action from executing anyway.
 
-```bash
-cp .env.example .env
-# Edit .env — add your API key(s)
+---
+
+## 📦 Project Structure
+
 ```
-
-```bash
-# Edit config.yaml to choose your provider/model
-# Default uses Groq (free tier, fastest)
-```
-
-**Minimum: set `GROQ_API_KEY` in `.env`** — everything else works out of the box.
-
-### 3. Run
-
-```bash
-python server.py
-# Opens at http://localhost:8000
+ai-voice-agent/
+│
+├── agent/
+│   ├── __init__.py        # Package exports
+│   ├── state.py           # AgentState TypedDict (add_messages reducer)
+│   ├── nodes.py           # stt_node, agent_node (interrupt + lru_cache)
+│   ├── tools.py           # 5 LangChain @tool definitions + ALL_TOOLS registry
+│   ├── graph.py           # StateGraph compilation, streaming, HITL resume
+│   ├── llm.py             # Multi-provider LLM factory (Groq/OpenAI/Anthropic/Ollama)
+│   └── stt.py             # STT abstraction (Groq Whisper / OpenAI)
+│
+├── config/
+│   ├── settings.py        # Pydantic settings (YAML + env var loading)
+│   └── logging_config.py  # Structured logger
+│
+├── ui/
+│   ├── index.html         # Single-page app
+│   ├── style.css          # Dark-mode design system (CSS variables)
+│   ├── app.js             # SSE streaming, pipeline tracker, HITL flow
+│   └── recorder.js        # MediaRecorder audio capture + visualizer
+│
+├── server.py              # FastAPI app (lifespan, SSE, REST endpoints)
+├── config.yaml            # Single config file — swap models in one line
+├── pyproject.toml         # uv/pip project definition
+└── .env                   # API keys (never committed)
 ```
 
 ---
 
-## Configuration Reference
+## 🚀 Quick Start
 
-All settings live in `config.yaml`:
+### 1 · Clone & install
+
+```bash
+git clone https://github.com/Pandharimaske/ai-voice-agent.git
+cd ai-voice-agent
+
+# Install uv (if not already installed)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Install all dependencies
+uv sync
+```
+
+### 2 · Configure API keys
+
+```bash
+cp .env.example .env   # or create .env manually
+```
+
+```env
+# .env
+GROQ_API_KEY=gsk_...          # Required — get from console.groq.com
+OPENAI_API_KEY=sk-...         # Optional — only if using OpenAI provider
+ANTHROPIC_API_KEY=sk-ant-...  # Optional — only if using Anthropic provider
+```
+
+### 3 · (Optional) Swap models
+
+Edit `config.yaml` — no code changes needed:
 
 ```yaml
 stt:
-  provider: "groq"           # groq | openai
-  model: "whisper-large-v3"
+  provider: "groq"
+  model: "whisper-large-v3"       # or "openai" + "whisper-1"
 
 llm:
-  provider: "groq"           # groq | openai | anthropic
-  model: "llama-3.3-70b-versatile"
+  provider: "groq"
+  model: "llama-3.3-70b-versatile" # or "openai"/"gpt-4o" or "ollama"/"llama3.2"
   temperature: 0.1
 
-output:
-  folder: "./output"         # ← change to any path
-
 hitl:
-  enabled: true              # set false to auto-confirm all
-  require_confirmation_for:
-    - "create_file"
-    - "write_code"
-
-memory:
-  db_path: "./data/checkpoints.db"
-  session_history_limit: 20
+  enabled: true   # set false to skip confirmations
 ```
 
-### Switching providers
+### 4 · Run
 
-```yaml
-# To use OpenAI:
-stt:
-  provider: "openai"
-  model: "whisper-1"
-llm:
-  provider: "openai"
-  model: "gpt-4o-mini"
-
-# To use Anthropic for LLM:
-llm:
-  provider: "anthropic"
-  model: "claude-3-5-haiku-20241022"
+```bash
+uv run python server.py
 ```
+
+Open **http://localhost:8000** 🎉
 
 ---
 
-## Hardware Note
+## 🖥️ UI Features
 
-ARIA uses API-based STT (Groq Whisper) rather than running Whisper locally because:
-
-- `whisper-large-v3` requires ~6 GB VRAM to run efficiently
-- Local CPU inference on `whisper-small` takes 30–60 seconds per clip
-- Groq's hosted Whisper runs at ~300× realtime and is **free** on the developer tier
-- Transcription quality is identical to running the model locally
-
-If you want to run fully offline, replace `GroqSTT` in `agent/stt.py` with `faster-whisper` — see the comments in that file.
+| Feature | Description |
+|---|---|
+| **Pipeline Steps Bar** | Live tracker: `🎤 Transcribe → 🧠 Reason → ⚡ Execute → ✅ Done` |
+| **Intent Badges** | Shows all tools used per turn — accumulates: `📖 Read File + 💻 Write Code` |
+| **Voice Recording** | Click 🎙️ to record via mic with live waveform visualizer |
+| **File Upload** | Click 📂 to upload any `.wav` / `.mp3` audio file |
+| **HITL Dialog** | Confirms destructive actions before execution |
+| **Session Sidebar** | Full history with one-click load & 🗑️ delete |
+| **Output Files Panel** | Auto-refreshes after every tool run — shows files created |
+| **Output Path Selector** | Switch / add output folders without restarting |
 
 ---
 
-## Project Structure
+## 🔌 API Reference
 
-```
-ARIA/
-├── config.yaml           # ← Start here
-├── .env                  # API keys (git-ignored)
-├── server.py             # FastAPI backend (entry point)
-├── ui/                   # Premium Web Frontend
-│   ├── index.html        # Structure
-│   ├── style.css         # Premium design
-│   ├── app.js            # Frontend logic
-│   └── recorder.js       # Mic recording logic
-├── agent/
-│   ├── state.py          # Pydantic models + AgentState
-│   ├── stt.py            # STT abstraction (Groq / OpenAI)
-│   ├── intent.py         # LLM factory + intent chain
-│   ├── tools.py          # create_file, write_code, summarize, chat
-│   ├── nodes.py          # LangGraph node functions
-│   └── graph.py          # Graph assembly + SQLite checkpointer
-├── config/
-│   ├── settings.py       # Pydantic settings loader
-│   └── logging_config.py # Centralized logging setup
-├── output/               # ALL file writes go here (sandboxed)
-└── data/
-    └── checkpoints.db    # LangGraph SQLite checkpointer
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/` | Serve the UI |
+| `GET` | `/health` | Health check |
+| `POST` | `/api/process_text_stream` | Text → SSE stream of agent updates |
+| `POST` | `/api/process_stream` | Audio upload → SSE stream |
+| `POST` | `/api/transcribe` | Audio → transcript only |
+| `POST` | `/api/confirm` | Resume HITL (`{thread_id, confirmed: bool}`) |
+| `GET` | `/api/sessions` | List all saved sessions |
+| `GET` | `/api/sessions/{id}` | Load a specific session |
+| `DELETE` | `/api/sessions/{id}` | Delete a session from SQLite |
+| `GET` | `/api/output_files` | List files in output folder |
+
+All streaming endpoints return **Server-Sent Events (SSE)** with this payload per event:
+
+```jsonc
+{
+  "thread_id": "uuid",
+  "transcript": "what the user said",
+  "detected_intent": "📖 Read File + 💻 Write Code",
+  "action_taken": "  • write_code(filename='app.py', ...)",
+  "messages": [
+    { "role": "user",      "content": "...", "intent": "💻 Write Code" },
+    { "role": "assistant", "content": "Done! Here's what I created..." }
+  ],
+  "is_interrupted": false,
+  "interrupt_data": null,
+  "output_path": "./output",
+  "error": null
+}
 ```
 
 ---
 
-## Bonus Features Implemented
+## 🧠 Technical Design Decisions
 
-- [x] **Compound commands** — multiple intents in one utterance
-- [x] **Human-in-the-Loop** — confirmation before file ops
-- [x] **Graceful degradation** — intent fallback to chat, error display
-- [x] **Session memory** — chat history across turns
-- [x] **SQLite checkpointing** — HITL state persists across UI calls
+### `add_messages` Reducer
+```python
+# agent/state.py
+class AgentState(TypedDict, total=False):
+    messages: Annotated[List, add_messages]  # LG 0.4 — dedupes by message ID
+```
+Using `add_messages` from `langgraph.graph.message` instead of `operator.add` ensures proper ID-based deduplication when checkpoints are restored — no duplicate messages on resume.
+
+### `interrupt()` instead of `interrupt_before`
+```python
+# agent/nodes.py — called INSIDE agent_node, not as a graph config option
+confirmed = interrupt({"message": "...", "actions_summary": "...", "tool_names": [...]})
+if not confirmed:
+    return {"messages": [AIMessage(content="Cancelled.")]}  # no tool_calls!
+```
+The LangGraph 0.4 `interrupt()` function gives **code-level control** over exactly when and why a graph pauses — no static node list needed.
+
+### LRU-cached LLM
+```python
+@functools.lru_cache(maxsize=1)
+def _get_llm_with_tools():
+    ...  # runs exactly once, thread-safe
+```
+
+### Intent Accumulation
+Each ReAct loop pass merges its tool labels into the existing `detected_intent`:
+```
+Turn 1 pass: read_file  → "📖 Read File"
+Turn 1 pass: write_code → "📖 Read File + 💻 Write Code"
+Turn 2 starts          → reset to None, starts fresh
+```
+
+### FastAPI Lifespan
+```python
+@asynccontextmanager
+async def lifespan(app):
+    async with AsyncSqliteSaver.from_conn_string(str(settings.db_path)) as saver:
+        init_graph(saver)
+        yield
+    # saver.close() called automatically
+```
+Replaces fragile global singletons — the SQLite connection is opened and closed cleanly with the app lifecycle.
 
 ---
 
-## License
+## ⚙️ Supported Model Providers
 
-MIT
+| Provider | LLM Examples | STT |
+|---|---|---|
+| **Groq** ⭐ | `llama-3.3-70b-versatile`, `mixtral-8x7b` | `whisper-large-v3` |
+| **OpenAI** | `gpt-4o`, `gpt-4o-mini` | `whisper-1` |
+| **Anthropic** | `claude-3-5-sonnet-20241022` | — |
+| **Ollama** | `llama3.2`, `mistral`, `codellama` | — |
+
+Switch providers by editing **two lines** in `config.yaml` — no code changes.
+
+---
+
+## 🗺️ Roadmap
+
+- [ ] Text-to-Speech output (read responses aloud)
+- [ ] Streaming token-by-token response in chat
+- [ ] Multi-file context (RAG over output folder)
+- [ ] Plugin system for custom tools
+- [ ] Docker compose for one-command deploy
+
+---
+
+## 📄 License
+
+MIT © [Pandhari Maske](https://github.com/Pandharimaske)
+
+---
+
+<div align="center">
+
+<img src="https://capsule-render.vercel.app/api?type=waving&color=7c6aff&height=100&section=footer" width="100%"/>
+
+**Built with LangGraph · LangChain · FastAPI · Groq**
+
+⭐ Star this repo if ARIA impressed you!
+
+</div>
