@@ -1,0 +1,37 @@
+# ─────────────────────────────────────────────
+#  ARIA — Audio Reasoning Intelligence Agent
+#  config.yaml  |  Change ONE value to swap models
+# ─────────────────────────────────────────────
+
+# ── Speech-to-Text ────────────────────────────
+stt:
+  provider: "groq"          # Options: "groq" | "openai"
+  model: "whisper-large-v3" # groq: whisper-large-v3 | openai: whisper-1
+
+# ── Language Model ────────────────────────────
+llm:
+  provider: "groq"                    # Options: "groq" | "openai" | "anthropic"
+  model: "llama-3.3-70b-versatile"    # groq: llama-3.3-70b-versatile | llama-3.1-8b-instant
+                                      # openai: gpt-4o | gpt-4o-mini
+                                      # anthropic: claude-3-5-haiku-20241022 | claude-3-5-sonnet-20241022
+  temperature: 0.1
+
+# ── Output Folder ─────────────────────────────
+# All file creation and code writing is sandboxed here.
+# Change to any absolute or relative path you prefer.
+output:
+  folder: "./output"
+
+# ── Human-in-the-Loop (HITL) ──────────────────
+hitl:
+  enabled: true
+  # Which intents require explicit user confirmation before executing
+  require_confirmation_for:
+    - "create_file"
+    - "write_code"
+    - "run_terminal"
+
+# ── Memory & Checkpointing ────────────────────
+memory:
+  db_path: "./data/checkpoints.db"   # SQLite DB for LangGraph checkpointer
+  session_history_limit: 20          # Max messages kept in context window

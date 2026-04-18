@@ -1,0 +1,33 @@
+# ─────────────────────────────────────────────
+#  ARIA — requirements.txt
+# ─────────────────────────────────────────────
+
+# Core LangChain + LangGraph
+langchain>=0.3.0
+langchain-core>=0.3.0
+langgraph>=0.2.50
+
+# LLM providers
+langchain-groq>=0.2.0
+langchain-openai>=0.2.0
+langchain-anthropic>=0.3.0
+
+# STT & TTS API clients
+groq>=0.9.0
+openai>=1.0.0
+gTTS>=2.5.0
+anthropic>=0.40.0
+
+# Web Server
+fastapi>=0.110.0
+uvicorn>=0.27.0
+python-multipart>=0.0.9
+
+# Config & environment
+pydantic>=2.5.0
+python-dotenv>=1.0.0
+pyyaml>=6.0.0
+
+# Audio processing
+scipy>=1.11.0
+numpy>=1.26.0
